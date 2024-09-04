@@ -28,6 +28,26 @@ jobs:
       run: terraform init
       working-directory: ./terraform
 
+    - name: Create ZeroTier Network via ZTAdmin
+      id: create_network
+      run: |
+        ZTADMIN_API_URL="http://your-ztadmin-url:8080/api"
+        ZTADMIN_API_KEY=${{ secrets.ZTADMIN_API_KEY }}
+
+        response=$(curl -X POST "$ZTADMIN_API_URL/networks" \
+        -H "Authorization: Bearer $ZTADMIN_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{
+              "name": "${{ github.event.inputs.client_name }}_network",
+              "private": true
+            }')
+
+        # Extract Network ID from the API response
+        network_id=$(echo $response | jq -r '.id')
+
+        # Save the Network ID to the GitHub environment file
+        echo "network_id=$network_id" >> $GITHUB_ENV
+
     - name: Terraform Apply
       env:
         CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
@@ -35,5 +55,6 @@ jobs:
       run: terraform apply -auto-approve \
            -var "client_name=${{ github.event.inputs.client_name }}" \
            -var "client_domain=${{ github.event.inputs.client_domain }}" \
-           -var "client_tunnel_name=${{ github.event.inputs.client_tunnel_name }}"
+           -var "client_tunnel_name=${{ github.event.inputs.client_tunnel_name }}" \
+           -var "zerotier_network_id=${{ env.network_id }}"  # Use the environment variable created earlier
       working-directory: ./terraform
