@@ -1,0 +1,39 @@
+name: Deploy Client Infrastructure with ZeroTier Controller and ZTAdmin
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_name:
+        description: 'Client name'
+        required: true
+      client_domain:
+        description: 'Client domain'
+        required: true
+      client_tunnel_name:
+        description: 'Cloudflare Tunnel name for the client'
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v1
+
+    - name: Initialize Terraform
+      run: terraform init
+      working-directory: ./terraform
+
+    - name: Terraform Apply
+      env:
+        CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+        VULTR_API_KEY: ${{ secrets.VULTR_API_KEY }}
+      run: terraform apply -auto-approve \
+           -var "client_name=${{ github.event.inputs.client_name }}" \
+           -var "client_domain=${{ github.event.inputs.client_domain }}" \
+           -var "client_tunnel_name=${{ github.event.inputs.client_tunnel_name }}"
+      working-directory: ./terraform
