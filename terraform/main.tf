@@ -1,9 +1,15 @@
-provider "vultr" {
-  api_key = var.vultr_api_key
+# Correct Cloudflare provider source
+provider "cloudflare" {
+  source  = "cloudflare/cloudflare"
+  version = "~> 3.0"
+  api_token = var.cloudflare_api_key
 }
 
-provider "cloudflare" {
-  api_token = var.cloudflare_api_key
+# Correct Vultr provider source
+provider "vultr" {
+  source  = "vultr/vultr"
+  version = "~> 2.0"
+  api_key = var.vultr_api_key
 }
 
 resource "cloudflare_zone" "client_zone" {
