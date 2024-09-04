@@ -43,10 +43,10 @@ jobs:
     # Apply Terraform to deploy ZeroTier controllers and ZTAdmin
     - name: Terraform Apply (Deploy ZeroTier controllers and ZTAdmin)
       run: terraform apply -auto-approve \
-           -var "client_name=${{ github.event.inputs.client_name }}" \
-           -var "client_domain=${{ github.event.inputs.client_domain }}" \
-           -var "tunnel_port=${{ github.event.inputs.tunnel_port }}" \
-           -var "ssh_port=${{ github.event.inputs.ssh_port }}"
+           -var="client_name=${{ github.event.inputs.client_name }}" \
+           -var="client_domain=${{ github.event.inputs.client_domain }}" \
+           -var="tunnel_port=${{ github.event.inputs.tunnel_port }}" \
+           -var="ssh_port=${{ github.event.inputs.ssh_port }}"
       working-directory: ./terraform
 
     # Save SSH private key to GitHub Secrets
