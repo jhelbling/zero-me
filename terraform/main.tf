@@ -1,14 +1,21 @@
-# Correct Cloudflare provider source
+terraform {
+  required_providers {
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 3.0"
+    }
+    vultr = {
+      source  = "vultr/vultr"
+      version = "~> 2.0"
+    }
+  }
+}
+
 provider "cloudflare" {
-  source  = "cloudflare/cloudflare"
-  version = "~> 3.0"
   api_token = var.cloudflare_api_key
 }
 
-# Correct Vultr provider source
 provider "vultr" {
-  source  = "vultr/vultr"
-  version = "~> 2.0"
   api_key = var.vultr_api_key
 }
 
