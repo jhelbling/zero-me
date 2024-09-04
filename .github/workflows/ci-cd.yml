@@ -1,4 +1,4 @@
-name: Deploy Client Infrastructure with ZeroTier Controller and ZTAdmin
+name: Deploy ZeroTier Controllers and ZTAdmin
 
 on:
   workflow_dispatch:
@@ -9,30 +9,141 @@ on:
       client_domain:
         description: 'Client domain'
         required: true
-      client_tunnel_name:
-        description: 'Cloudflare Tunnel name for the client'
-        required: true
+      ssh_port:
+        description: 'SSH port (default: 22)'
+        required: false
+        default: 22
+      tunnel_port:
+        description: 'Port for Cloudflare Tunnel (default: 9993)'
+        required: false
+        default: 9993
+
+permissions:
+  actions: read
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+    # Checkout the repository
     - name: Checkout repository
       uses: actions/checkout@v2
 
+    # Setup Terraform
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v1
 
+    # Initialize Terraform
     - name: Initialize Terraform
       run: terraform init
       working-directory: ./terraform
 
-    - name: Create ZeroTier Network via ZTAdmin
-      id: create_network
+    # Apply Terraform to deploy ZeroTier controllers and ZTAdmin
+    - name: Terraform Apply (Deploy ZeroTier controllers and ZTAdmin)
+      run: terraform apply -auto-approve \
+           -var "client_name=${{ github.event.inputs.client_name }}" \
+           -var "client_domain=${{ github.event.inputs.client_domain }}" \
+           -var "tunnel_port=${{ github.event.inputs.tunnel_port }}" \
+           -var "ssh_port=${{ github.event.inputs.ssh_port }}"
+      working-directory: ./terraform
+
+    # Save SSH private key to GitHub Secrets
+    - name: Save SSH Private Key to GitHub Secrets
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        ZTADMIN_API_URL="http://your-ztadmin-url:8080/api"
-        ZTADMIN_API_KEY=${{ secrets.ZTADMIN_API_KEY }}
+        # Get SSH private key from Terraform
+        SSH_PRIVATE_KEY=$(terraform output -raw tls_private_key)
+
+        # Encode the SSH private key in base64
+        ENCODED_SSH_KEY=$(echo "$SSH_PRIVATE_KEY" | base64)
+
+        # Add the secret using GitHub API
+        curl -X PUT \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/${{ github.repository }}/actions/secrets/SSH_PRIVATE_KEY \
+          -d "{\"encrypted_value\":\"$ENCODED_SSH_KEY\",\"key_id\":\"$(curl -s https://api.github.com/repos/${{ github.repository }}/actions/secrets/public-key | jq -r .key_id)\"}"
+
+    # Get controller and ZTAdmin IPs
+    - name: Get Controller and ZTAdmin IPs
+      run: |
+        CONTROLLER_IPS=$(terraform output -json controller_ips)
+        ZTADMIN_IP=$(terraform output -raw ztadmin_ip)
+
+        echo "controller_ips=$CONTROLLER_IPS" >> $GITHUB_ENV
+        echo "ztadmin_ip=$ZTADMIN_IP" >> $GITHUB_ENV
+
+    # SSH into all controllers
+    - name: SSH into All Controllers
+      uses: appleboy/ssh-action@v0.1.3
+      with:
+        hosts: ${{ join(',', fromJson(env.controller_ips)) }}  # Connect to all controllers
+        username: root
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: ${{ github.event.inputs.ssh_port }}
+        script: |
+          echo "Controller setup for ${github.event.inputs.client_name}"
+          # Add additional setup commands here
+
+    # SSH into ZTAdmin server and retrieve ZTAdmin API key
+    - name: Install ZTAdmin and retrieve API key
+      uses: appleboy/ssh-action@v0.1.3
+      with:
+        host: ${{ env.ztadmin_ip }}
+        username: root
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: ${{ github.event.inputs.ssh_port }}
+        script_stop: true  # Stop on error
+        script: |
+          docker run -d -p 8080:8080 --name ztadmin itzg/ztadmin
+          sleep 10  # Wait for the container to start
+          ZTADMIN_API_KEY=$(docker exec ztadmin cat /config/ztadmin.conf | grep api_token | awk '{print $2}')
+          echo "ztadmin_api_key=$ZTADMIN_API_KEY" >> /root/ztadmin_api_key.txt
+
+    # Wait for ZTAdmin to start
+    - name: Wait for ZTAdmin to start
+      uses: appleboy/ssh-action@v0.1.3
+      with:
+        host: ${{ env.ztadmin_ip }}
+        username: root
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: ${{ github.event.inputs.ssh_port }}
+        script_stop: true
+        script: |
+          for i in {1..10}; do
+            if docker ps | grep -q ztadmin; then
+              echo "ZTAdmin started successfully."
+              break
+            else
+              echo "Waiting for ZTAdmin to start..."
+              sleep 5
+            fi
+          done
+
+    # Retrieve ZTAdmin API Key
+    - name: Retrieve ZTAdmin API Key
+      run: |
+        scp -o StrictHostKeyChecking=no root@${{ env.ztadmin_ip }}:/root/ztadmin_api_key.txt .
+        ZTADMIN_API_KEY=$(cat ztadmin_api_key.txt | cut -d '=' -f 2)
+        echo "ztadmin_api_key=$ZTADMIN_API_KEY" >> $GITHUB_ENV
+
+    # Check if ZTAdmin is reachable
+    - name: Check if ZTAdmin is reachable
+      run: |
+        until curl -f http://ztadmin.${{ github.event.inputs.client_domain }}:8080; do
+          echo "Waiting for ZTAdmin to become available..."
+          sleep 5
+        done
+      timeout-minutes: 5
+
+    # Create ZeroTier Network via ZTAdmin
+    - name: Create ZeroTier Network via ZTAdmin
+      run: |
+        ZTADMIN_API_URL="http://ztadmin.${{ github.event.inputs.client_domain }}:8080/api"
+        ZTADMIN_API_KEY=${{ env.ztadmin_api_key }}
 
         response=$(curl -X POST "$ZTADMIN_API_URL/networks" \
         -H "Authorization: Bearer $ZTADMIN_API_KEY" \
@@ -42,19 +153,18 @@ jobs:
               "private": true
             }')
 
-        # Extract Network ID from the API response
         network_id=$(echo $response | jq -r '.id')
-
-        # Save the Network ID to the GitHub environment file
         echo "network_id=$network_id" >> $GITHUB_ENV
 
-    - name: Terraform Apply
-      env:
-        CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
-        VULTR_API_KEY: ${{ secrets.VULTR_API_KEY }}
-      run: terraform apply -auto-approve \
-           -var "client_name=${{ github.event.inputs.client_name }}" \
-           -var "client_domain=${{ github.event.inputs.client_domain }}" \
-           -var "client_tunnel_name=${{ github.event.inputs.client_tunnel_name }}" \
-           -var "zerotier_network_id=${{ env.network_id }}"  # Use the environment variable created earlier
-      working-directory: ./terraform
+    # Save deployment report
+    - name: Save deployment report
+      run: |
+        echo "Deployment report for ${github.event.inputs.client_name}" > report.txt
+        echo "ZTAdmin URL: ztadmin.${{ github.event.inputs.client_domain }}" >> report.txt
+        echo "Controller IPs: ${{ env.controller_ips }}" >> report.txt
+
+    # Upload deployment report as an artifact
+    - uses: actions/upload-artifact@v2
+      with:
+        name: deployment-report
+        path: report.txt
