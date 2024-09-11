@@ -29,7 +29,7 @@ jobs:
     steps:
     # Checkout the repository
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
 
     # Setup Terraform
     - name: Setup Terraform
